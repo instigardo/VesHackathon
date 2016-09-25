@@ -1,20 +1,33 @@
 package com.hackathon.reciever;
 
+import java.io.UnsupportedEncodingException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URLEncoder;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 
+import org.json.simple.JSONArray;
+import org.json.simple.JSONObject;
+import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
 
 import com.google.common.base.Strings;
 import com.hackathon.core.ApiCollector;
 import com.hackathon.core.ApiRepository;
+import com.hackathon.parser.Parser;
+
 
 @Component
 public class FetchTask implements Runnable{
@@ -37,19 +50,59 @@ public class FetchTask implements Runnable{
     
 	@Override
 	public void run() {
-		Iterable<ApiCollector> documents = apiRepository.findAll(); 
+		Iterable<ApiCollector> documents = apiRepository.findAll();
+		List<String> uris = new ArrayList<>();
 		for (ApiCollector apiCollector : documents) {
-			String uri = apiCollector.getUri();
-			if(!settings.getRestUris().contains(uri)){
-				
-			}
+			uris.add(apiCollector.getUri());
 		}
-		// TODO Auto-generated method stub
-		
+		for (String settingUri : settings.getRestUris()) {
+			if(!uris.contains(settingUri)){
+				saveApi(settingUri);
+			}			
+		}
+		try {
+			restCalls();
+		} catch (Exception e) {
+			LOGGER.error("Rest call exception", e);
+		}
 	}
 	
+	private void restCalls() throws UnsupportedEncodingException, URISyntaxException, ParseException {
+        String api_endpoint = "http://rss2json.com/api.json?rss_url=";
+    	Iterable<ApiCollector> documents = apiRepository.findAll();
+    	for (ApiCollector apiCollector : documents) {
+        	RestTemplate restTemplate = new RestTemplate();
+        	String rss_url = apiCollector.getUri();
+    		URI URI = new URI(api_endpoint+URLEncoder.encode(rss_url, "UTF-8"));
+            String response = restTemplate.getForObject(URI, String.class);
+            JSONParser jsonParser = new JSONParser();
+			JSONObject responseJson = (JSONObject) jsonParser.parse(response);
+			if("ok".equals(responseJson.get("status"))){
+				JSONArray itemsJson = (JSONArray) responseJson.get("items");
+				for (Object item : itemsJson) {
+					JSONObject itemJson = (JSONObject) item;
+					Parser parser = new Parser();
+					parser.parseFetchedData(itemJson);
+					
+				}
+				System.out.println(responseJson.get("items"));
+			}
+		}
+		
+    	// TODO Auto-generated method stub
+		
+	}
 
-    @PostConstruct
+	private void saveApi(String settingUri) {
+		ApiCollector apiCollector = new ApiCollector();
+		apiCollector.setUri(settingUri);
+		apiCollector.setInsert_timestamp(System.currentTimeMillis());
+		apiCollector.setEnabled(true);
+		apiRepository.save(apiCollector);
+		
+	}
+
+	@PostConstruct
     public void onStartup() {
         taskScheduler.schedule(this, new CronTrigger(settings.getCron()));
 //        setOnline(true);
